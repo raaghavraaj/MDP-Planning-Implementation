@@ -7,14 +7,9 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--mdp", required=True,
                     help="path to the input MDP file")
 parser.add_argument("--algorithm", default="vi",
-                    help="for one of the 7 algorithms")
+                    help="either vi, hpi or lp algorithm")
 
-
-def get(T, s, a, s_prime):
-    if s_prime in T[s][a]:
-        return T[s][a][s_prime]
-    else:
-        return (0, 0)
+np.random.seed(0)
 
 
 def checkPrecision(a, b, lim):
@@ -25,7 +20,7 @@ def checkPrecision(a, b, lim):
         return True
 
 
-def valueIteration(T, gamma):
+def valueIteration(T, gamma, mdpType, endStates):
     n, k = len(T), len(T[0])  # numStates, numActions
 
     V_star = np.zeros(n, dtype=float)
@@ -34,25 +29,65 @@ def valueIteration(T, gamma):
     while True:
         V_temp = np.zeros(n)
         for s in range(n):
-            V_temp[s] = max([sum([get(T, s, a, s_prime)[0]*(
-                get(T, s, a, s_prime)[1] + gamma*V_star[s_prime]) for s_prime in range(n)]) for a in range(k)])
+            V_temp[s] = max([sum([p*(r + gamma*V_star[s_prime])
+                            for (s_prime, p, r) in T[s][a]]) for a in range(k)])
         if checkPrecision(V_temp, V_star, 1e-9):
             break
-        V_star = V_temp
+        V_star = V_temp.copy()
 
-    Q_star = [[sum([get(T, s, a, s_prime)[0]*(get(T, s, a, s_prime)[1] + gamma*V_star[s_prime])
-                   for s_prime in range(n)]) for a in range(k)] for s in range(n)]
+    Q_star = [[sum([p*(r + gamma*V_star[s_prime]) for (s_prime, p, r) in T[s][a]])
+               for a in range(k)] for s in range(n)]
     pi_star = np.argmax(Q_star, axis=-1)
+
+    if mdpType:
+        for s in endStates:
+            V_star[s] = 0
 
     return V_star, pi_star
 
 
-def howardPI(T, gamma, mdpType):
+def howardPI(T, gamma, mdpType, endStates):
+    n, k = len(T), len(T[0])  # numStates, numActions
 
-    pass
+    V_star = np.zeros(n)
+    pi_star = np.random.choice(np.arange(k), n)
+    while True:
+        # calculating V using Bellman Equations
+        A = np.zeros((n, n))
+        B = np.zeros(n)
+        for s in range(n):
+            for (s_prime, p, r) in T[s][pi_star[s]]:
+                A[s][s_prime] = p
+                B[s] += p*r
+        A = gamma * A - np.eye(n)
+        B = -1 * B
+
+        if mdpType:
+            A = np.delete(A, endStates, 0)
+            A = np.delete(A, endStates, 1)
+            B = np.delete(B, endStates, 0)
+
+        V_star = np.linalg.solve(A, B)
+        V = np.zeros(n)
+        write = 0
+        for i in range(n):
+            if i not in endStates:
+                V[i] = V_star[write]
+                write += 1
+        V_star = V
+
+        # computing Q_star and new policy values to check
+        Q_star = [[sum([p*(r + gamma*V_star[s_prime]) for (s_prime, p, r) in T[s][a]])
+                   for a in range(k)] for s in range(n)]
+        pi = np.argmax(Q_star, axis=1)
+        if np.all(pi == pi_star):
+            break
+        pi_star = pi
+
+    return V_star, pi_star
 
 
-def linearProgramming(T, gamma, mdpType):
+def linearProgramming(T, gamma, mdpType, endStates):
     n, k = len(T), len(T[0])  # numStates, numActions
 
     problem = lp.LpProblem("mdp", lp.LpMinimize)
@@ -61,17 +96,25 @@ def linearProgramming(T, gamma, mdpType):
     problem += sum(vars)
 
     for s in range(n):
+        if s in endStates:
+            problem += vars[s] == 0
+            continue
+
         for a in range(k):
-            temp = sum([get(T, s, a, s_prime)[0]*(get(T, s, a, s_prime)[1] + gamma*vars[s_prime])
-                        for s_prime in range(n)])
+            temp = sum([p*(r + gamma*vars[s_prime])
+                        for (s_prime, p, r) in T[s][a]])
             problem += vars[s] >= temp
 
     problem.solve(lp.PULP_CBC_CMD(msg=0))
 
     V_star = [var.varValue for var in vars]
-    Q_star = [[sum([get(T, s, a, s_prime)[0]*(get(T, s, a, s_prime)[1] + gamma*V_star[s_prime])
-                   for s_prime in range(n)]) for a in range(k)] for s in range(n)]
+    Q_star = [[sum([p*(r + gamma*V_star[s_prime]) for (s_prime, p, r) in T[s][a]])
+               for a in range(k)] for s in range(n)]
     pi_star = np.argmax(Q_star, axis=-1)
+
+    if mdpType:
+        for s in endStates:
+            V_star[s] = 0
 
     return V_star, pi_star
 
@@ -86,12 +129,11 @@ class MDP:
             self.endStates = [int(s) for s in lines[2].split()[1:]]
 
             # transition and reward matrix, N x A x N
-            self.T = [[dict() for j in range(self.numActions)]
+            self.T = [[list() for j in range(self.numActions)]
                       for i in range(self.numStates)]
             self.mdpType = None  # 0 continuing, 1 episodic
             self.gamma = None
 
-            # filling up the matrices and initialising mdpType, gamma
             for l in lines[3:]:
                 d = l.split()
                 if d[0] == "transition":
@@ -100,7 +142,7 @@ class MDP:
                     s_prime = int(d[3])
                     r = float(d[4])
                     p = float(d[5])
-                    self.T[s][a][s_prime] = (p, r)
+                    self.T[s][a].append((s_prime, p, r))
 
                 elif d[0] == "mdptype":
                     if d[1] == "continuing":
@@ -113,19 +155,13 @@ class MDP:
 
     def runAlgo(self, algorithm):
         if algorithm == "vi":
-            V_star, pi_star = valueIteration(self.T, self.gamma)
+            return valueIteration(self.T, self.gamma, self.mdpType, self.endStates)
 
         elif algorithm == "hpi":
-            V_star, pi_star = howardPI(
-                self.T, self.gamma, self.mdpType)
+            return howardPI(self.T, self.gamma, self.mdpType, self.endStates)
 
         else:
-            V_star, pi_star = linearProgramming(
-                self.T, self.gamma, self.mdpType)
-
-        # print(V_star)
-        # print(pi_star)
-        return V_star, pi_star
+            return linearProgramming(self.T, self.gamma, self.mdpType, self.endStates)
 
 
 if __name__ == "__main__":
