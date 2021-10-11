@@ -1,0 +1,6 @@
+1. Numpy Documentation:
+    https://numpy.org/doc/stable/
+
+2. PulP Documentation:
+    https://coin-or.github.io/pulp/main/optimisation_concepts.html#linear-programing
+

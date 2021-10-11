@@ -6,7 +6,7 @@ import pulp as lp
 parser = argparse.ArgumentParser()
 parser.add_argument("--mdp", required=True,
                     help="path to the input MDP file")
-parser.add_argument("--algorithm", default="vi",
+parser.add_argument("--algorithm", default="hpi",
                     help="either vi, hpi or lp algorithm")
 
 np.random.seed(0)
@@ -37,6 +37,11 @@ def valueIteration(T, gamma, mdpType, endStates):
 
     Q_star = [[sum([p*(r + gamma*V_star[s_prime]) for (s_prime, p, r) in T[s][a]])
                for a in range(k)] for s in range(n)]
+    for s in range(n):
+        if s not in endStates:
+            for a in range(k):
+                if len(T[s][a]) == 0:
+                    Q_star[s][a] = -1e9
     pi_star = np.argmax(Q_star, axis=-1)
 
     if mdpType:
@@ -79,6 +84,11 @@ def howardPI(T, gamma, mdpType, endStates):
         # computing Q_star and new policy values to check
         Q_star = [[sum([p*(r + gamma*V_star[s_prime]) for (s_prime, p, r) in T[s][a]])
                    for a in range(k)] for s in range(n)]
+        for s in range(n):
+            if s not in endStates:
+                for a in range(k):
+                    if len(T[s][a]) == 0:
+                        Q_star[s][a] = -1e9
         pi = np.argmax(Q_star, axis=1)
         if np.all(pi == pi_star):
             break
@@ -110,6 +120,11 @@ def linearProgramming(T, gamma, mdpType, endStates):
     V_star = [var.varValue for var in vars]
     Q_star = [[sum([p*(r + gamma*V_star[s_prime]) for (s_prime, p, r) in T[s][a]])
                for a in range(k)] for s in range(n)]
+    for s in range(n):
+        if s not in endStates:
+            for a in range(k):
+                if len(T[s][a]) == 0:
+                    Q_star[s][a] = -1e9
     pi_star = np.argmax(Q_star, axis=-1)
 
     if mdpType:
